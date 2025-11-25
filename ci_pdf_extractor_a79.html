@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Commercial Invoice Line Item Extractor (A79)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <div id="root"></div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "react": "https://esm.sh/react@18.2.0",
+            "react-dom/client": "https://esm.sh/react-dom@18.2.0/client"
+        }
+    }
+    </script>
+
+    <script type="module">
+        import React, { useState } from 'react';
+        import { createRoot } from 'react-dom/client';
+
+        const { useCallback } = React;
+
+        // A79 API Configuration
+        const A79_CONFIG = {
+            // Update these with your actual A79 API details
+            endpoint: 'https://your-a79-api.com/api/extract-invoice',
+            apiKey: 'YOUR_API_KEY_HERE', // Or get from environment/config
+            timeout: 60000 // 60 seconds
+        };
+
+        function App() {
+            const [file, setFile] = useState(null);
+            const [processing, setProcessing] = useState(false);
+            const [status, setStatus] = useState('');
+            const [csvData, setCsvData] = useState(null);
+            const [lineItems, setLineItems] = useState([]);
+            const [error, setError] = useState('');
+            const [a79ApiUrl, setA79ApiUrl] = useState(A79_CONFIG.endpoint);
+            const [showConfig, setShowConfig] = useState(false);
+
+            const handleFileChange = (e) => {
+                const selectedFile = e.target.files[0];
+                if (selectedFile && selectedFile.type === 'application/pdf') {
+                    setFile(selectedFile);
+                    setError('');
+                    setStatus('');
+                    setCsvData(null);
+                    setLineItems([]);
+                } else {
+                    setError('Please select a valid PDF file');
+                    setFile(null);
+                }
+            };
+
+            const fileToBase64 = (file) => {
+                return new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = () => {
+                        const base64 = reader.result.split(',')[1];
+                        resolve(base64);
+                    };
+                    reader.onerror = reject;
+                    reader.readAsDataURL(file);
+                });
+            };
+
+            const extractLineItemsWithA79 = async () => {
+                if (!file) {
+                    setError('Please select a PDF file first');
+                    return;
+                }
+
+                if (!a79ApiUrl || a79ApiUrl === 'https://your-a79-api.com/api/extract-invoice') {
+                    setError('Please configure the A79 API endpoint first (click Settings)');
+                    return;
+                }
+
+                setProcessing(true);
+                setStatus('Reading PDF file...');
+                setError('');
+
+                try {
+                    // Convert PDF to base64
+                    const base64Data = await fileToBase64(file);
+                    
+                    setStatus('Sending to A79 API for extraction...');
+
+                    // Call A79 API
+                    const response = await fetch(a79ApiUrl, {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                            ...(A79_CONFIG.apiKey !== 'YOUR_API_KEY_HERE' && {
+                                "Authorization": `Bearer ${A79_CONFIG.apiKey}`
+                            })
+                        },
+                        body: JSON.stringify({
+                            document: base64Data,
+                            document_type: "commercial_invoice",
+                            extract_fields: [
+                                "line_items",
+                                "sku",
+                                "description",
+                                "hts_code",
+                                "country_of_origin",
+                                "quantity",
+                                "unit_price",
+                                "total_value",
+                                "weight",
+                                "unit_of_measure"
+                            ],
+                            format: "line_items"
+                        })
+                    });
+
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        throw new Error(`A79 API request failed: ${response.status} - ${errorText}`);
+                    }
+
+                    const data = await response.json();
+                    
+                    setStatus('Processing A79 response...');
+
+                    // Parse A79 response
+                    // Adjust this based on your actual A79 API response structure
+                    let items;
+                    
+                    if (data.line_items) {
+                        items = data.line_items;
+                    } else if (data.data && data.data.line_items) {
+                        items = data.data.line_items;
+                    } else if (Array.isArray(data)) {
+                        items = data;
+                    } else {
+                        throw new Error('Unable to parse A79 response format');
+                    }
+
+                    // Normalize A79 data to our format
+                    const normalizedItems = items.map((item, index) => ({
+                        SKU: item.sku || item.part_number || item.SKU || `ITEM-${index + 1}`,
+                        DESCRIPTION: item.description || item.DESCRIPTION || '',
+                        HTS: item.hts_code || item.hts || item.HTS || 'N/A',
+                        COUNTRY_OF_ORIGIN: item.country_of_origin || item.origin_country || item.COUNTRY_OF_ORIGIN || 'N/A',
+                        NO_OF_PACKAGE: item.package_count || item.packages || item.NO_OF_PACKAGE || '',
+                        QUANTITY: parseFloat(item.quantity || item.qty || item.QUANTITY || 0),
+                        NET_WEIGHT: parseFloat(item.net_weight || item.weight || item.NET_WEIGHT || 0),
+                        GROSS_WEIGHT: parseFloat(item.gross_weight || item.weight || item.GROSS_WEIGHT || 0),
+                        UNIT_PRICE: parseFloat(item.unit_price || item.price || item.UNIT_PRICE || 0),
+                        VALUE: parseFloat(item.total_value || item.value || item.VALUE || (item.quantity * item.unit_price) || 0),
+                        QTY_UNIT: item.unit_of_measure || item.uom || item.QTY_UNIT || 'EA'
+                    }));
+
+                    if (normalizedItems.length === 0) {
+                        throw new Error('No line items found in A79 response');
+                    }
+
+                    setLineItems(normalizedItems);
+                    
+                    // Convert to CSV
+                    const csv = convertToCSV(normalizedItems);
+                    setCsvData(csv);
+                    
+                    setStatus(`Successfully extracted ${normalizedItems.length} line items via A79`);
+
+                } catch (err) {
+                    console.error('Error:', err);
+                    setError(`Error: ${err.message}`);
+                    setStatus('');
+                } finally {
+                    setProcessing(false);
+                }
+            };
+
+            const convertToCSV = (items) => {
+                const headers = [
+                    'SKU',
+                    'DESCRIPTION',
+                    'HTS',
+                    'COUNTRY OF ORIGIN',
+                    'NO. OF PACKAGE',
+                    'QUANTITY',
+                    'NET WEIGHT',
+                    'GROSS WEIGHT',
+                    'UNIT PRICE',
+                    'VALUE',
+                    'QTY UNIT'
+                ];
+
+                const rows = items.map(item => [
+                    item.SKU || '',
+                    item.DESCRIPTION || '',
+                    item.HTS || 'N/A',
+                    item.COUNTRY_OF_ORIGIN || 'N/A',
+                    item.NO_OF_PACKAGE || '',
+                    item.QUANTITY || 0,
+                    item.NET_WEIGHT || 0,
+                    item.GROSS_WEIGHT || 0,
+                    item.UNIT_PRICE || 0,
+                    item.VALUE || 0,
+                    item.QTY_UNIT || 'EA'
+                ]);
+
+                const csvContent = [
+                    headers.join(','),
+                    ...rows.map(row => row.map(cell => {
+                        const cellStr = String(cell);
+                        if (cellStr.includes(',') || cellStr.includes('"') || cellStr.includes('\n')) {
+                            return `"${cellStr.replace(/"/g, '""')}"`;
+                        }
+                        return cellStr;
+                    }).join(','))
+                ].join('\n');
+
+                return csvContent;
+            };
+
+            const downloadCSV = () => {
+                if (!csvData) return;
+
+                const blob = new Blob([csvData], { type: 'text/csv' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `invoice_line_items_${new Date().toISOString().slice(0, 10)}.csv`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            };
+
+            const formatCurrency = (value) => {
+                return new Intl.NumberFormat('en-US', {
+                    style: 'currency',
+                    currency: 'USD'
+                }).format(value);
+            };
+
+            const totalValue = lineItems.reduce((sum, item) => sum + (item.VALUE || 0), 0);
+            const totalQuantity = lineItems.reduce((sum, item) => sum + (item.QUANTITY || 0), 0);
+
+            return (
+                <div className="max-w-6xl mx-auto p-6">
+                    <div className="bg-white rounded-lg shadow-lg p-8 mb-6">
+                        <div className="flex justify-between items-start mb-6">
+                            <div>
+                                <h1 className="text-3xl font-bold text-gray-800 mb-2">
+                                    Commercial Invoice Line Item Extractor
+                                </h1>
+                                <p className="text-gray-600">
+                                    Upload a commercial invoice PDF to extract line items using A79 API
+                                </p>
+                            </div>
+                            <button
+                                onClick={() => setShowConfig(!showConfig)}
+                                className="px-4 py-2 text-sm bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors"
+                            >
+                                ⚙️ Settings
+                            </button>
+                        </div>
+
+                        {/* Configuration Panel */}
+                        {showConfig && (
+                            <div className="mb-6 p-4 bg-gray-50 border border-gray-200 rounded-lg">
+                                <h3 className="text-lg font-semibold text-gray-800 mb-3">A79 API Configuration</h3>
+                                <div className="space-y-3">
+                                    <div>
+                                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                                            A79 API Endpoint
+                                        </label>
+                                        <input
+                                            type="text"
+                                            value={a79ApiUrl}
+                                            onChange={(e) => setA79ApiUrl(e.target.value)}
+                                            placeholder="https://your-a79-api.com/api/extract-invoice"
+                                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        />
+                                    </div>
+                                    <p className="text-sm text-gray-600">
+                                        Update the API endpoint URL to point to your A79 service
+                                    </p>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* File Upload */}
+                        <div className="mb-6">
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                                Select Commercial Invoice PDF
+                            </label>
+                            <input
+                                type="file"
+                                accept="application/pdf"
+                                onChange={handleFileChange}
+                                className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+                            />
+                            {file && (
+                                <p className="mt-2 text-sm text-gray-600">
+                                    Selected: {file.name} ({(file.size / 1024).toFixed(2)} KB)
+                                </p>
+                            )}
+                        </div>
+
+                        {/* Extract Button */}
+                        <button
+                            onClick={extractLineItemsWithA79}
+                            disabled={!file || processing}
+                            className={`w-full py-3 px-6 rounded-lg font-semibold text-white transition-colors ${
+                                !file || processing
+                                    ? 'bg-gray-400 cursor-not-allowed'
+                                    : 'bg-blue-600 hover:bg-blue-700'
+                            }`}
+                        >
+                            {processing ? 'Processing with A79...' : 'Extract Line Items via A79'}
+                        </button>
+
+                        {/* Status Messages */}
+                        {status && (
+                            <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                                <p className="text-blue-800">
+                                    <span className="inline-block animate-spin mr-2">⚙️</span>
+                                    {status}
+                                </p>
+                            </div>
+                        )}
+
+                        {error && (
+                            <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg">
+                                <p className="text-red-800">❌ {error}</p>
+                            </div>
+                        )}
+
+                        {/* Download Button */}
+                        {csvData && (
+                            <div className="mt-6">
+                                <button
+                                    onClick={downloadCSV}
+                                    className="w-full py-3 px-6 rounded-lg font-semibold text-white bg-green-600 hover:bg-green-700 transition-colors"
+                                >
+                                    ⬇️ Download CSV File
+                                </button>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Summary Stats */}
+                    {lineItems.length > 0 && (
+                        <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+                            <h2 className="text-xl font-bold text-gray-800 mb-4">Summary</h2>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <div className="bg-blue-50 p-4 rounded-lg">
+                                    <p className="text-sm text-gray-600">Total Line Items</p>
+                                    <p className="text-2xl font-bold text-blue-600">{lineItems.length}</p>
+                                </div>
+                                <div className="bg-green-50 p-4 rounded-lg">
+                                    <p className="text-sm text-gray-600">Total Quantity</p>
+                                    <p className="text-2xl font-bold text-green-600">{totalQuantity}</p>
+                                </div>
+                                <div className="bg-purple-50 p-4 rounded-lg">
+                                    <p className="text-sm text-gray-600">Total Value</p>
+                                    <p className="text-2xl font-bold text-purple-600">{formatCurrency(totalValue)}</p>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Line Items Table */}
+                    {lineItems.length > 0 && (
+                        <div className="bg-white rounded-lg shadow-lg p-6">
+                            <h2 className="text-xl font-bold text-gray-800 mb-4">Extracted Line Items</h2>
+                            <div className="overflow-x-auto">
+                                <table className="min-w-full divide-y divide-gray-200">
+                                    <thead className="bg-gray-50">
+                                        <tr>
+                                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">SKU</th>
+                                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Description</th>
+                                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">HTS</th>
+                                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Country</th>
+                                            <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Qty</th>
+                                            <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Unit Price</th>
+                                            <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Value</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="bg-white divide-y divide-gray-200">
+                                        {lineItems.map((item, index) => (
+                                            <tr key={index} className="hover:bg-gray-50">
+                                                <td className="px-4 py-3 text-sm text-gray-900">{item.SKU}</td>
+                                                <td className="px-4 py-3 text-sm text-gray-900">{item.DESCRIPTION}</td>
+                                                <td className="px-4 py-3 text-sm text-gray-900">{item.HTS}</td>
+                                                <td className="px-4 py-3 text-sm text-gray-900">{item.COUNTRY_OF_ORIGIN}</td>
+                                                <td className="px-4 py-3 text-sm text-right text-gray-900">{item.QUANTITY}</td>
+                                                <td className="px-4 py-3 text-sm text-right text-gray-900">{formatCurrency(item.UNIT_PRICE)}</td>
+                                                <td className="px-4 py-3 text-sm text-right font-medium text-gray-900">{formatCurrency(item.VALUE)}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Instructions */}
+                    <div className="mt-6 bg-gray-100 rounded-lg p-6">
+                        <h3 className="text-lg font-semibold text-gray-800 mb-3">How to Use</h3>
+                        <ol className="list-decimal list-inside space-y-2 text-gray-700">
+                            <li>Configure your A79 API endpoint (click Settings)</li>
+                            <li>Click "Choose File" and select your commercial invoice PDF</li>
+                            <li>Click "Extract Line Items via A79" to process the PDF</li>
+                            <li>Review the extracted line items in the table below</li>
+                            <li>Click "Download CSV File" to save the data</li>
+                        </ol>
+                        <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded">
+                            <p className="text-sm text-yellow-800">
+                                <strong>⚠️ Configuration Required:</strong> This tool requires your A79 API endpoint. 
+                                Click Settings to configure the API URL before processing files.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
