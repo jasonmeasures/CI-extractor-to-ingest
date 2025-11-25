@@ -1,0 +1,23 @@
+{
+  "customer_number": "TARGET001",
+  "name": "Target Corporation",
+  "additional_fields": [
+    "target_po",
+    "vendor_number",
+    "dc_number",
+    "store_number"
+  ],
+  "special_rules": [
+    "Extract Target PO number separately from other PO fields",
+    "Vendor ID should be mapped to Vendor Number field",
+    "DC Number is typically found in header or footer",
+    "Store Number may be in shipping address or separate field"
+  ],
+  "field_mappings": {
+    "vendor_id": "vendor_number",
+    "po_number": "target_po",
+    "distribution_center": "dc_number"
+  },
+  "notes": "Target Corporation requires specific PO and vendor tracking fields"
+}
+

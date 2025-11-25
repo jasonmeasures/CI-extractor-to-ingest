@@ -1,0 +1,79 @@
+.file-upload {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.file-label {
+  display: block;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: #333;
+  margin-bottom: 0.5rem;
+}
+
+.file-input {
+  display: block;
+  width: 100%;
+  padding: 0.75rem;
+  border: 2px dashed #ccc;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 0.2s;
+  background: white;
+  font-size: 1rem;
+}
+
+.file-input:hover:not(:disabled) {
+  border-color: #4a90e2;
+  background: #f9f9f9;
+}
+
+.file-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.file-input::-webkit-file-upload-button {
+  padding: 0.5rem 1rem;
+  margin-right: 1rem;
+  background: #2196f3;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.file-input::-webkit-file-upload-button:hover {
+  background: #1976d2;
+}
+
+.file-info {
+  margin-top: 0.5rem;
+  font-size: 0.9rem;
+  color: #666;
+}
+
+.extract-btn {
+  width: 100%;
+  padding: 1rem;
+  background: #2196f3;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.extract-btn:hover:not(.disabled) {
+  background: #1976d2;
+}
+
+.extract-btn.disabled {
+  background: #ccc;
+  cursor: not-allowed;
+}
+

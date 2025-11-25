@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Commercial Invoice Line Item Extractor</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <div id="root"></div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "react": "https://esm.sh/react@18.2.0",
+            "react-dom/client": "https://esm.sh/react-dom@18.2.0/client"
+        }
+    }
+    </script>
+
+    <script type="module">
+        import React, { useState } from 'react';
+        import { createRoot } from 'react-dom/client';
+
+        const { useCallback } = React;
+
+        function App() {
+            const [file, setFile] = useState(null);
+            const [processing, setProcessing] = useState(false);
+            const [status, setStatus] = useState('');
+            const [csvData, setCsvData] = useState(null);
+            const [lineItems, setLineItems] = useState([]);
+            const [error, setError] = useState('');
+
+            const handleFileChange = (e) => {
+                const selectedFile = e.target.files[0];
+                if (selectedFile && selectedFile.type === 'application/pdf') {
+                    setFile(selectedFile);
+                    setError('');
+                    setStatus('');
+                    setCsvData(null);
+                    setLineItems([]);
+                } else {
+                    setError('Please select a valid PDF file');
+                    setFile(null);
+                }
+            };
+
+            const fileToBase64 = (file) => {
+                return new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = () => {
+                        const base64 = reader.result.split(',')[1];
+                        resolve(base64);
+                    };
+                    reader.onerror = reject;
+                    reader.readAsDataURL(file);
+                });
+            };
+
+            const extractLineItems = async () => {
+                if (!file) {
+                    setError('Please select a PDF file first');
+                    return;
+                }
+
+                setProcessing(true);
+                setStatus('Reading PDF file...');
+                setError('');
+
+                try {
+                    // Convert PDF to base64
+                    const base64Data = await fileToBase64(file);
+                    
+                    setStatus('Extracting line items with AI...');
+
+                    // Call Claude API to extract line items
+                    const response = await fetch("https://api.anthropic.com/v1/messages", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                        },
+                        body: JSON.stringify({
+                            model: "claude-sonnet-4-20250514",
+                            max_tokens: 4000,
+                            messages: [
+                                {
+                                    role: "user",
+                                    content: [
+                                        {
+                                            type: "document",
+                                            source: {
+                                                type: "base64",
+                                                media_type: "application/pdf",
+                                                data: base64Data
+                                            }
+                                        },
+                                        {
+                                            type: "text",
+                                            text: `Extract ALL line items from this commercial invoice PDF and return them as a JSON array.
+
+For each line item, extract:
+- SKU: Part number or SKU (if not available, use line item number like "ITEM-1", "ITEM-2", etc.)
+- DESCRIPTION: Product description
+- HTS: HTS/HS code (if available, otherwise "N/A")
+- COUNTRY_OF_ORIGIN: Country of origin (if available, otherwise "N/A")
+- NO_OF_PACKAGE: Number of packages (if available, otherwise empty string)
+- QUANTITY: Quantity (numeric)
+- NET_WEIGHT: Net weight in kg (if available, otherwise 0)
+- GROSS_WEIGHT: Gross weight in kg (if available, otherwise 0)
+- UNIT_PRICE: Unit price (numeric)
+- VALUE: Total value/amount for this line item (QUANTITY × UNIT_PRICE)
+- QTY_UNIT: Unit of measure (e.g., "EA", "PCS", "KG", etc., default to "EA" if not specified)
+
+CRITICAL INSTRUCTIONS:
+1. Extract EVERY line item from the invoice - do not skip any
+2. If a field is not available in the PDF, use the default values specified above
+3. For VALUE, calculate as QUANTITY × UNIT_PRICE
+4. Return ONLY valid JSON - no markdown, no backticks, no explanations
+5. The JSON must be a single array of objects
+
+Example format:
+[
+  {
+    "SKU": "COMP001",
+    "DESCRIPTION": "Computer Processor",
+    "HTS": "8471.30.0100",
+    "COUNTRY_OF_ORIGIN": "US",
+    "NO_OF_PACKAGE": "",
+    "QUANTITY": 50,
+    "NET_WEIGHT": 25.5,
+    "GROSS_WEIGHT": 25.5,
+    "UNIT_PRICE": 850.00,
+    "VALUE": 42500.00,
+    "QTY_UNIT": "EA"
+  }
+]
+
+DO NOT OUTPUT ANYTHING OTHER THAN VALID JSON. Your entire response must be a single, valid JSON array.`
+                                        }
+                                    ]
+                                }
+                            ]
+                        })
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`API request failed: ${response.status}`);
+                    }
+
+                    const data = await response.json();
+                    let responseText = data.content[0].text;
+                    
+                    setStatus('Parsing extracted data...');
+
+                    // Clean up response - remove markdown code blocks if present
+                    responseText = responseText.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim();
+
+                    // Parse JSON
+                    const items = JSON.parse(responseText);
+
+                    if (!Array.isArray(items) || items.length === 0) {
+                        throw new Error('No line items found in the invoice');
+                    }
+
+                    setLineItems(items);
+                    
+                    // Convert to CSV
+                    const csv = convertToCSV(items);
+                    setCsvData(csv);
+                    
+                    setStatus(`Successfully extracted ${items.length} line items`);
+
+                } catch (err) {
+                    console.error('Error:', err);
+                    setError(`Error: ${err.message}`);
+                    setStatus('');
+                } finally {
+                    setProcessing(false);
+                }
+            };
+
+            const convertToCSV = (items) => {
+                const headers = [
+                    'SKU',
+                    'DESCRIPTION',
+                    'HTS',
+                    'COUNTRY OF ORIGIN',
+                    'NO. OF PACKAGE',
+                    'QUANTITY',
+                    'NET WEIGHT',
+                    'GROSS WEIGHT',
+                    'UNIT PRICE',
+                    'VALUE',
+                    'QTY UNIT'
+                ];
+
+                const rows = items.map(item => [
+                    item.SKU || '',
+                    item.DESCRIPTION || '',
+                    item.HTS || 'N/A',
+                    item.COUNTRY_OF_ORIGIN || 'N/A',
+                    item.NO_OF_PACKAGE || '',
+                    item.QUANTITY || 0,
+                    item.NET_WEIGHT || 0,
+                    item.GROSS_WEIGHT || 0,
+                    item.UNIT_PRICE || 0,
+                    item.VALUE || 0,
+                    item.QTY_UNIT || 'EA'
+                ]);
+
+                const csvContent = [
+                    headers.join(','),
+                    ...rows.map(row => row.map(cell => {
+                        // Escape cells that contain commas or quotes
+                        const cellStr = String(cell);
+                        if (cellStr.includes(',') || cellStr.includes('"') || cellStr.includes('\n')) {
+                            return `"${cellStr.replace(/"/g, '""')}"`;
+                        }
+                        return cellStr;
+                    }).join(','))
+                ].join('\n');
+
+                return csvContent;
+            };
+
+            const downloadCSV = () => {
+                if (!csvData) return;
+
+                const blob = new Blob([csvData], { type: 'text/csv' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `invoice_line_items_${new Date().toISOString().slice(0, 10)}.csv`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            };
+
+            const formatCurrency = (value) => {
+                return new Intl.NumberFormat('en-US', {
+                    style: 'currency',
+                    currency: 'USD'
+                }).format(value);
+            };
+
+            const totalValue = lineItems.reduce((sum, item) => sum + (item.VALUE || 0), 0);
+            const totalQuantity = lineItems.reduce((sum, item) => sum + (item.QUANTITY || 0), 0);
+
+            return (
+                <div className="max-w-6xl mx-auto p-6">
+                    <div className="bg-white rounded-lg shadow-lg p-8 mb-6">
+                        <h1 className="text-3xl font-bold text-gray-800 mb-2">
+                            Commercial Invoice Line Item Extractor
+                        </h1>
+                        <p className="text-gray-600 mb-6">
+                            Upload a commercial invoice PDF to automatically extract line items and generate a CSV file
+                        </p>
+
+                        {/* File Upload */}
+                        <div className="mb-6">
+                            <label className="block text-sm font-medium text-gray-700 mb-2">
+                                Select Commercial Invoice PDF
+                            </label>
+                            <input
+                                type="file"
+                                accept="application/pdf"
+                                onChange={handleFileChange}
+                                className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+                            />
+                            {file && (
+                                <p className="mt-2 text-sm text-gray-600">
+                                    Selected: {file.name} ({(file.size / 1024).toFixed(2)} KB)
+                                </p>
+                            )}
+                        </div>
+
+                        {/* Extract Button */}
+                        <button
+                            onClick={extractLineItems}
+                            disabled={!file || processing}
+                            className={`w-full py-3 px-6 rounded-lg font-semibold text-white transition-colors ${
+                                !file || processing
+                                    ? 'bg-gray-400 cursor-not-allowed'
+                                    : 'bg-blue-600 hover:bg-blue-700'
+                            }`}
+                        >
+                            {processing ? 'Processing...' : 'Extract Line Items'}
+                        </button>
+
+                        {/* Status Messages */}
+                        {status && (
+                            <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                                <p className="text-blue-800">{status}</p>
+                            </div>
+                        )}
+
+                        {error && (
+                            <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg">
+                                <p className="text-red-800">{error}</p>
+                            </div>
+                        )}
+
+                        {/* Download Button */}
+                        {csvData && (
+                            <div className="mt-6">
+                                <button
+                                    onClick={downloadCSV}
+                                    className="w-full py-3 px-6 rounded-lg font-semibold text-white bg-green-600 hover:bg-green-700 transition-colors"
+                                >
+                                    Download CSV File
+                                </button>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Summary Stats */}
+                    {lineItems.length > 0 && (
+                        <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+                            <h2 className="text-xl font-bold text-gray-800 mb-4">Summary</h2>
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <div className="bg-blue-50 p-4 rounded-lg">
+                                    <p className="text-sm text-gray-600">Total Line Items</p>
+                                    <p className="text-2xl font-bold text-blue-600">{lineItems.length}</p>
+                                </div>
+                                <div className="bg-green-50 p-4 rounded-lg">
+                                    <p className="text-sm text-gray-600">Total Quantity</p>
+                                    <p className="text-2xl font-bold text-green-600">{totalQuantity}</p>
+                                </div>
+                                <div className="bg-purple-50 p-4 rounded-lg">
+                                    <p className="text-sm text-gray-600">Total Value</p>
+                                    <p className="text-2xl font-bold text-purple-600">{formatCurrency(totalValue)}</p>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Line Items Table */}
+                    {lineItems.length > 0 && (
+                        <div className="bg-white rounded-lg shadow-lg p-6">
+                            <h2 className="text-xl font-bold text-gray-800 mb-4">Extracted Line Items</h2>
+                            <div className="overflow-x-auto">
+                                <table className="min-w-full divide-y divide-gray-200">
+                                    <thead className="bg-gray-50">
+                                        <tr>
+                                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">SKU</th>
+                                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Description</th>
+                                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">HTS</th>
+                                            <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Country</th>
+                                            <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Qty</th>
+                                            <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Unit Price</th>
+                                            <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Value</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="bg-white divide-y divide-gray-200">
+                                        {lineItems.map((item, index) => (
+                                            <tr key={index} className="hover:bg-gray-50">
+                                                <td className="px-4 py-3 text-sm text-gray-900">{item.SKU}</td>
+                                                <td className="px-4 py-3 text-sm text-gray-900">{item.DESCRIPTION}</td>
+                                                <td className="px-4 py-3 text-sm text-gray-900">{item.HTS}</td>
+                                                <td className="px-4 py-3 text-sm text-gray-900">{item.COUNTRY_OF_ORIGIN}</td>
+                                                <td className="px-4 py-3 text-sm text-right text-gray-900">{item.QUANTITY}</td>
+                                                <td className="px-4 py-3 text-sm text-right text-gray-900">{formatCurrency(item.UNIT_PRICE)}</td>
+                                                <td className="px-4 py-3 text-sm text-right font-medium text-gray-900">{formatCurrency(item.VALUE)}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Instructions */}
+                    <div className="mt-6 bg-gray-100 rounded-lg p-6">
+                        <h3 className="text-lg font-semibold text-gray-800 mb-3">How to Use</h3>
+                        <ol className="list-decimal list-inside space-y-2 text-gray-700">
+                            <li>Click "Choose File" and select your commercial invoice PDF</li>
+                            <li>Click "Extract Line Items" to process the PDF</li>
+                            <li>Review the extracted line items in the table below</li>
+                            <li>Click "Download CSV File" to save the data in CSV format</li>
+                        </ol>
+                        <p className="mt-4 text-sm text-gray-600">
+                            The CSV will contain all columns: SKU, DESCRIPTION, HTS, COUNTRY OF ORIGIN, NO. OF PACKAGE, 
+                            QUANTITY, NET WEIGHT, GROSS WEIGHT, UNIT PRICE, VALUE, and QTY UNIT.
+                        </p>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

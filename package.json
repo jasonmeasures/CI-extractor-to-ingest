@@ -1,0 +1,26 @@
+{
+  "name": "ci-pdf-extractor",
+  "version": "1.0.0",
+  "description": "Commercial Invoice PDF Line Item Extractor - Full Stack",
+  "scripts": {
+    "install:all": "npm run install:frontend && npm run install:backend",
+    "install:frontend": "cd frontend && npm install",
+    "install:backend": "cd backend && npm install",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:backend": "cd backend && npm run dev",
+    "test:frontend": "cd frontend && npm test",
+    "test:backend": "cd backend && npm test",
+    "test:e2e": "npx playwright test",
+    "test:all": "npm run test:frontend && npm run test:backend && npm run test:e2e",
+    "lint": "cd frontend && npm run lint && cd ../backend && npm run lint"
+  },
+  "keywords": [
+    "pdf",
+    "extraction",
+    "commercial-invoice",
+    "a79"
+  ],
+  "author": "KlearNow",
+  "license": "MIT"
+}
+

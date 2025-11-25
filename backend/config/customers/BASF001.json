@@ -1,0 +1,26 @@
+{
+  "customer_number": "BASF001",
+  "name": "BASF Corporation",
+  "additional_fields": [
+    "material_number",
+    "un_number",
+    "batch_lot",
+    "cas_number",
+    "hazard_class"
+  ],
+  "special_rules": [
+    "Material Number is critical for chemical identification",
+    "UN Number required for hazardous materials shipping",
+    "Batch/Lot number essential for traceability",
+    "CAS Number may be in description or separate field",
+    "Hazard Class must be extracted if present"
+  ],
+  "field_mappings": {
+    "material_no": "material_number",
+    "lot_number": "batch_lot",
+    "batch": "batch_lot",
+    "cas": "cas_number"
+  },
+  "notes": "BASF requires chemical safety and traceability data for compliance"
+}
+
