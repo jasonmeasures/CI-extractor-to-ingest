@@ -506,3 +506,6 @@ You now have a **production-ready invoice extractor** with:
 Version: 2.0 (Hybrid Baseline)  
 Last Updated: November 2024
 
+
+
+

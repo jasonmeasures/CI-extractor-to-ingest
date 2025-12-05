@@ -6,6 +6,7 @@ import { promisify } from 'util'
 import { logger } from '../utils/logger.js'
 import { getA79Endpoint, buildStatusUrl, getAlternateStatusEndpoints, A79_ENDPOINTS } from '../config/a79Endpoints.js'
 import { buildInstructions } from './instructionBuilder.js'
+import { getPdfPageCount } from '../utils/pdfUtils.js'
 
 const execAsync = promisify(exec)
 
@@ -260,59 +261,88 @@ class A79ExtractService {
           })
           
           if (parsedOutput && Array.isArray(parsedOutput) && parsedOutput.length > 0) {
-            const firstPage = parsedOutput[0]
-            logger.info(`📄 First page structure:`, {
-              hasContent: !!firstPage?.content,
-              contentType: typeof firstPage?.content,
-              contentKeys: firstPage?.content ? Object.keys(firstPage.content).slice(0, 10) : [],
-              contentIsArray: Array.isArray(firstPage?.content)
-            })
+            logger.info(`📄 Processing ${parsedOutput.length} page(s) from A79 response`)
             
-            if (firstPage && firstPage.content) {
-              // Check for items array in content
-              if (firstPage.content.items && Array.isArray(firstPage.content.items)) {
-                const lineItems = firstPage.content.items
-                const metadata = firstPage.content.metadata || {}
-                const otherData = firstPage.content.other_data || {}
+            // MULTI-PAGE PROCESSING: Merge all pages into single line_items array
+            const allLineItems = []
+            let mergedMetadata = {}
+            let mergedOtherData = {}
+            let itemCounter = 1 // Sequential numbering across all pages
+            
+            for (let pageIndex = 0; pageIndex < parsedOutput.length; pageIndex++) {
+              const page = parsedOutput[pageIndex]
+              const pageNumber = page.page_number || (pageIndex + 1)
+              
+              logger.info(`📄 Processing page ${pageNumber} (index ${pageIndex})`)
+              
+              if (page && page.content) {
+                let pageItems = []
                 
-                logger.info(`✅ Extracted ${lineItems.length} line items from A79 response (from content.items)`)
-                logger.debug(`First line item sample:`, JSON.stringify(lineItems[0], null, 2).substring(0, 500))
+                // Check for items array in content (most common structure)
+                if (page.content.items && Array.isArray(page.content.items)) {
+                  pageItems = page.content.items
+                  logger.info(`  Found ${pageItems.length} items in content.items`)
+                }
+                // Check if content has line_items directly
+                else if (page.content.line_items && Array.isArray(page.content.line_items)) {
+                  pageItems = page.content.line_items
+                  logger.info(`  Found ${pageItems.length} items in content.line_items`)
+                }
+                // Check if content itself is an array of items
+                else if (Array.isArray(page.content)) {
+                  pageItems = page.content
+                  logger.info(`  Found ${pageItems.length} items (content is array)`)
+                }
                 
-                return {
-                  line_items: lineItems,
-                  metadata: metadata,
-                  other_data: otherData,
-                  run_id: data.run_id,
-                  status: data.status
+                // Add items from this page with sequential numbering
+                if (pageItems.length > 0) {
+                  for (const item of pageItems) {
+                    // Ensure item_number is sequential across all pages
+                    const normalizedItem = {
+                      ...item,
+                      item_number: String(itemCounter)
+                    }
+                    allLineItems.push(normalizedItem)
+                    itemCounter++
+                  }
+                  logger.info(`  ✅ Added ${pageItems.length} items from page ${pageNumber} (total: ${allLineItems.length})`)
+                } else {
+                  logger.warn(`  ⚠️ Page ${pageNumber} has content but no items/line_items array. Content keys: ${Object.keys(page.content).join(', ')}`)
+                }
+                
+                // Merge metadata (prefer first page's metadata, but combine if needed)
+                if (page.content.metadata && Object.keys(page.content.metadata).length > 0) {
+                  mergedMetadata = { ...mergedMetadata, ...page.content.metadata }
+                }
+                
+                // Merge other_data (especially totals from last page)
+                if (page.content.other_data && Object.keys(page.content.other_data).length > 0) {
+                  mergedOtherData = { ...mergedOtherData, ...page.content.other_data }
                 }
               }
+            }
+            
+            if (allLineItems.length > 0) {
+              logger.info(`✅ Successfully merged ${allLineItems.length} line items from ${parsedOutput.length} page(s)`)
+              logger.debug(`First line item sample:`, JSON.stringify(allLineItems[0], null, 2).substring(0, 500))
               
-              // Check if content itself is an array of items
-              if (Array.isArray(firstPage.content)) {
-                logger.info(`Extracted ${firstPage.content.length} line items from A79 response (content is array)`)
-                return {
-                  line_items: firstPage.content,
-                  metadata: parsedOutput[0].metadata || {},
-                  other_data: parsedOutput[0].other_data || {},
-                  run_id: data.run_id,
-                  status: data.status
-                }
+              // Add extraction metadata
+              mergedMetadata = {
+                ...mergedMetadata,
+                total_pages_processed: parsedOutput.length,
+                total_items_extracted: allLineItems.length,
+                pages_with_line_items: parsedOutput.map((p, i) => p.page_number || (i + 1))
               }
               
-              // Check if content has line_items directly
-              if (firstPage.content.line_items && Array.isArray(firstPage.content.line_items)) {
-                logger.info(`Extracted ${firstPage.content.line_items.length} line items from A79 response (from content.line_items)`)
-                return {
-                  line_items: firstPage.content.line_items,
-                  metadata: firstPage.content.metadata || {},
-                  other_data: firstPage.content.other_data || {},
-                  run_id: data.run_id,
-                  status: data.status
-                }
+              return {
+                line_items: allLineItems,
+                metadata: mergedMetadata,
+                other_data: mergedOtherData,
+                run_id: data.run_id,
+                status: data.status
               }
-              
-              // Log what we found in content for debugging
-              logger.warn(`Content structure found but no items/line_items array. Content keys: ${Object.keys(firstPage.content).join(', ')}`)
+            } else {
+              logger.warn(`⚠️ No items found across ${parsedOutput.length} page(s)`)
             }
             
             // Check if parsedOutput is directly an array of line items
@@ -485,11 +515,33 @@ class A79ExtractService {
     try {
       logger.debug(`Calling A79 API: ${this.endpoint}`)
       
+      // Detect PDF page count to include in instructions
+      let pdfPageCount = null
+      try {
+        pdfPageCount = await getPdfPageCount(document)
+        logger.info(`📄 Detected PDF has ${pdfPageCount} page(s)`)
+        if (pdfPageCount > 1) {
+          logger.info(`⚠️ MULTI-PAGE DOCUMENT DETECTED: ${pdfPageCount} pages - will add explicit page count to instructions`)
+        }
+      } catch (error) {
+        logger.warn(`Could not detect PDF page count: ${error.message}. Proceeding without page count.`)
+      }
+      
       // Build instructions using three-tier system (baseline + customer + custom)
+      // Include page count if detected to force multi-page processing
       const customInstructions = buildInstructions({
         customer_number,
         custom_instructions,
-        extract_fields
+        extract_fields,
+        pdf_page_count: pdfPageCount
+      })
+      
+      // Log instruction details for debugging
+      logger.info(`📝 Instructions being sent to A79:`, {
+        instructionLength: customInstructions.length,
+        first200Chars: customInstructions.substring(0, 200),
+        containsMultiPage: customInstructions.includes('MULTI-PAGE') || customInstructions.includes('multi-page'),
+        containsPageByPage: customInstructions.includes('Page-by-Page') || customInstructions.includes('page-by-page')
       })
       
       // Add cache-busting parameter if clear_cache is true
@@ -934,6 +986,33 @@ class A79ExtractService {
     }
     
     logger.info(`✅ Validating ${data.line_items.length} line items for CSV`)
+    
+    // Check for potential incomplete extraction (multi-page documents with very few items)
+    if (data.line_items.length > 0 && data.line_items.length < 10) {
+      const lastItemNumber = parseInt(data.line_items[data.line_items.length - 1]?.item_number || '0')
+      const hasMetadata = !!data.extraction_metadata
+      
+      // If we have extraction metadata, check completeness
+      if (hasMetadata && data.extraction_metadata) {
+        const metadata = data.extraction_metadata
+        const pagesProcessed = metadata.total_pages_processed || 1
+        const itemsExtracted = metadata.total_items_extracted || data.line_items.length
+        const expectedItems = metadata.expected_items_estimate || 0
+        
+        if (pagesProcessed > 1 && itemsExtracted < expectedItems * 0.8) {
+          logger.warn(`⚠️ POTENTIAL INCOMPLETE EXTRACTION DETECTED:`, {
+            pagesProcessed,
+            itemsExtracted,
+            expectedItems,
+            completenessScore: metadata.completeness_score || 0,
+            warning: 'Multi-page document may have incomplete extraction'
+          })
+        }
+      } else if (!hasMetadata && lastItemNumber > 0 && lastItemNumber < 10) {
+        // No metadata but suspiciously few items - might be incomplete
+        logger.warn(`⚠️ WARNING: Only ${data.line_items.length} items extracted. If this is a multi-page document, extraction may be incomplete.`)
+      }
+    }
 
     // Validate and normalize each line item according to A79 enhanced instructions
     const validatedItems = data.line_items.map((item, index) => {

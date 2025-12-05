@@ -11,6 +11,7 @@ function App() {
   const [processing, setProcessing] = useState(false)
   const [status, setStatus] = useState('')
   const [error, setError] = useState('')
+  const [warning, setWarning] = useState('')
   const [lineItems, setLineItems] = useState([])
   const [csvData, setCsvData] = useState(null)
   const [clearCache, setClearCache] = useState(false)
@@ -40,6 +41,7 @@ function App() {
       
       setFile(selectedFile)
       setError('')
+      setWarning('')
       setStatus('')
       setCsvData(null)
       setLineItems([])
@@ -63,6 +65,7 @@ function App() {
     setProcessing(true)
     setStatus('Reading PDF file...')
     setError('')
+    setWarning('')
 
     try {
       setStatus(clearCache ? 'Sending to A79 API (cache cleared - fresh extraction)...' : 'Sending to A79 API for extraction...')
@@ -135,6 +138,24 @@ function App() {
       const csv = convertToCSV(normalizedItems)
       setCsvData(csv)
       
+      // Check for warnings from backend (incomplete extraction, multi-page issues, etc.)
+      if (result.warning) {
+        setWarning(result.warning)
+      }
+      
+      // Check extraction metadata for completeness issues
+      if (result.extraction_metadata) {
+        const metadata = result.extraction_metadata
+        const pagesProcessed = metadata.total_pages_processed || 1
+        const itemsExtracted = normalizedItems.length
+        
+        if (pagesProcessed > 1 && itemsExtracted < 20) {
+          setWarning(`⚠️ WARNING: Only ${itemsExtracted} items extracted from ${pagesProcessed}-page document. This may indicate incomplete extraction. Please verify all pages were processed.`)
+        } else if (metadata.completeness_score && metadata.completeness_score < 0.95) {
+          setWarning(`⚠️ WARNING: Completeness score is ${(metadata.completeness_score * 100).toFixed(0)}%. Some items may be missing.`)
+        }
+      }
+      
       setStatus(`Successfully extracted ${normalizedItems.length} line items via A79`)
 
     } catch (err) {
@@ -190,6 +211,19 @@ function App() {
           {error && (
             <div className="error-message">
               ❌ {error}
+            </div>
+          )}
+
+          {warning && (
+            <div style={{
+              marginTop: '1rem',
+              padding: '1rem',
+              backgroundColor: '#fff3cd',
+              border: '1px solid #ffc107',
+              borderRadius: '4px',
+              color: '#856404'
+            }}>
+              <strong>⚠️ Warning:</strong> {warning}
             </div>
           )}
 

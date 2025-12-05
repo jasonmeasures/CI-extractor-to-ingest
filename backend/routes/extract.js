@@ -120,7 +120,24 @@ router.post('/', (req, res, next) => {
       clear_cache: clearCache
     })
 
-    logger.info(`Extraction successful: ${result.line_items?.length || 0} items extracted`)
+    const itemsExtracted = result.line_items?.length || 0
+    logger.info(`Extraction successful: ${itemsExtracted} items extracted`)
+    
+    // Check for potential incomplete extraction (multi-page documents with very few items)
+    if (itemsExtracted > 0 && itemsExtracted < 10) {
+      const hasMetadata = result.extraction_metadata
+      const pagesProcessed = hasMetadata ? result.extraction_metadata.total_pages_processed : null
+      
+      // If metadata shows multiple pages but few items, add warning
+      if (pagesProcessed && pagesProcessed > 1 && itemsExtracted < 20) {
+        logger.warn(`⚠️ WARNING: Only ${itemsExtracted} items extracted from ${pagesProcessed}-page document. This may indicate incomplete extraction.`)
+        result.warning = `Only ${itemsExtracted} items extracted from ${pagesProcessed}-page document. Please verify all pages were processed.`
+      } else if (!hasMetadata && itemsExtracted < 10) {
+        // No metadata but suspiciously few items - might be incomplete
+        logger.warn(`⚠️ WARNING: Only ${itemsExtracted} items extracted. If this is a multi-page document, extraction may be incomplete.`)
+        result.warning = `Only ${itemsExtracted} items extracted. If this document has multiple pages, please verify all pages were processed.`
+      }
+    }
 
     res.json(result)
   } catch (error) {

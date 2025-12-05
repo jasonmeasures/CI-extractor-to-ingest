@@ -81,10 +81,36 @@ function buildCustomerInstructions(customerConfig) {
  * @param {string} options.customer_number - Customer number (e.g., "TARGET001")
  * @param {string} options.custom_instructions - User-provided custom instructions
  * @param {Array<string>} options.extract_fields - Additional fields to extract
+ * @param {number} options.pdf_page_count - Number of pages in the PDF (if known)
  * @returns {string} Complete instructions string
  */
-export function buildInstructions({ customer_number, custom_instructions, extract_fields = [] } = {}) {
+export function buildInstructions({ customer_number, custom_instructions, extract_fields = [], pdf_page_count = null } = {}) {
   let instructions = BASELINE_INSTRUCTIONS
+  
+  // If we know the page count, add explicit instruction at the very top
+  if (pdf_page_count && pdf_page_count > 1) {
+    const pageCountWarning = `
+
+[CRITICAL] THIS DOCUMENT HAS ${pdf_page_count} PAGES [CRITICAL]
+
+YOU MUST PROCESS ALL ${pdf_page_count} PAGES.
+
+DO NOT STOP AFTER PAGE 1.
+
+YOU MUST EXTRACT LINE ITEMS FROM:
+- Page 1
+- Page 2
+${pdf_page_count > 2 ? `- Page 3\n${pdf_page_count > 3 ? `- Page 4\n${pdf_page_count > 4 ? `- Page 5\n...and all remaining pages up to page ${pdf_page_count}` : ''}` : ''}` : ''}
+
+IF YOU ONLY EXTRACT ITEMS FROM PAGE 1 AND STOP, YOU HAVE FAILED COMPLETELY.
+
+COUNT THE PAGES: This PDF has ${pdf_page_count} pages total.
+PROCESS ALL ${pdf_page_count} PAGES BEFORE OUTPUTTING JSON.
+
+`
+    instructions = pageCountWarning + instructions
+    logger.info(`Added explicit ${pdf_page_count}-page instruction to force multi-page processing`)
+  }
 
   // Tier 2: Customer Instructions
   if (customer_number) {
